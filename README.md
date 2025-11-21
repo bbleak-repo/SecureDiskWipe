@@ -38,9 +38,12 @@ SecureDiskWipe goes beyond simple file deletion by implementing multiple layers 
 ### Safety Features
 
 - Explicit confirmation required (type 'DELETE')
+- Administrator privilege detection and warning
 - File and directory counting before deletion
+- File system audit policy check (Event Log forensics detection)
 - Detailed risk warnings for VSS and journal operations
 - Graceful error handling with permission checks
+- Failed file tracking and reporting
 - Automatic cleanup on errors
 
 ## Installation
@@ -239,6 +242,45 @@ When you run `cipher /w:c:\temp`, it:
 - Maximum paranoia
 - Drive about to be disposed of
 - Forensic analysis is a real threat
+
+## Event Log Forensics Check
+
+The tool automatically checks Windows audit policy to detect if file access events are being logged.
+
+### Audit Policy Detection
+
+**Disabled (Most Common):**
+```
+GOOD NEWS: File System Auditing is DISABLED
+File access is NOT being logged to Event Viewer.
+No file paths or access events in Security log.
+You're safe from event log forensics.
+```
+
+**Enabled (Rare - Corporate/Managed Systems):**
+```
+WARNING: File System Auditing is ENABLED
+Windows is logging file access events to the Security log.
+Deleted file paths may be visible in Event Viewer.
+```
+
+### What It Means
+
+- **Auditing disabled** (default): No file paths logged - you're safe
+- **Auditing enabled**: Event logs may show "file accessed" but NOT content
+- Without actual files, logs are circumstantial evidence only
+- Tool provides guidance on clearing logs if needed
+
+### Manual Check
+
+```bash
+# Check audit policy yourself (run as Administrator)
+auditpol /get /category:"Object Access"
+
+# Look for "File System" line
+# "No Auditing" = safe
+# "Success" or "Success and Failure" = file access being logged
+```
 
 ## Security Considerations
 

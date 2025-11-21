@@ -117,6 +117,42 @@ def check_ntfs_journal(drive_letter):
         return False
 
 
+def check_audit_policy():
+    """
+    Check if file access auditing is enabled (Windows only)
+
+    Returns tuple: (is_enabled, audit_info)
+    """
+    if sys.platform != 'win32':
+        return False, None
+
+    try:
+        result = subprocess.run(
+            ['auditpol', '/get', '/category:Object Access'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+
+        if result.returncode != 0:
+            return None, None
+
+        output = result.stdout
+
+        # Check for "Success" or "Success and Failure" in File System category
+        file_system_auditing = False
+        for line in output.split('\n'):
+            if 'File System' in line:
+                if 'Success' in line or 'Success and Failure' in line:
+                    file_system_auditing = True
+                    break
+
+        return file_system_auditing, output
+
+    except Exception:
+        return None, None
+
+
 def get_journal_size(drive_letter):
     """
     Get the NTFS journal maximum size (Windows only)
@@ -257,12 +293,48 @@ def parse_size_string(size_str):
 
 def print_security_warnings(folder_path):
     """
-    Print warnings about VSS and journaling with risk information
+    Print warnings about VSS, journaling, and audit policy with risk information
 
     Args:
         folder_path: Path to check for warnings
     """
     warnings_found = False
+
+    # Check audit policy first (most important for event log concerns)
+    audit_enabled, audit_info = check_audit_policy()
+
+    if audit_enabled is not None:
+        if audit_enabled:
+            warnings_found = True
+            print("\n" + "!" * 70)
+            print("WARNING: File System Auditing is ENABLED")
+            print("!" * 70)
+            print("\nWindows is logging file access events to the Security log.")
+            print("Deleted file paths may be visible in Event Viewer.")
+            print("\nWhat this means:")
+            print("  - File access operations are being logged")
+            print("  - Filenames and paths may be in Security.evtx")
+            print("  - Logs show 'file accessed' but NOT file content")
+            print("\nEvent log considerations:")
+            print("  - Logs will show files existed (but files are now gone)")
+            print("  - Clearing logs creates forensic indicator (Event ID 1102)")
+            print("  - Natural log rotation will eventually overwrite entries")
+            print("  - Without files, logs are circumstantial evidence only")
+            print("\nOptions:")
+            print("  1. Do nothing - files are securely deleted, logs just show history")
+            print("  2. Wait for natural log rotation (typically 20-30 days)")
+            print("  3. Clear all logs (obvious but effective):")
+            print("     wevtutil cl Security")
+            print("     wevtutil cl Application")
+            print("     wevtutil cl System")
+        else:
+            print("\n" + "=" * 70)
+            print("GOOD NEWS: File System Auditing is DISABLED")
+            print("=" * 70)
+            print("\nFile access is NOT being logged to Event Viewer.")
+            print("No file paths or access events in Security log.")
+            print("You're safe from event log forensics.")
+            print("=" * 70)
 
     # Check VSS
     has_shadows, shadow_info = check_vss_status()
