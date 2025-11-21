@@ -551,15 +551,26 @@ def secure_delete_folder(folder_path, passes=3, rename_files=True, verbose=False
 
     delete_elapsed = time.time() - delete_start
 
-    # Step 3: Remove empty directories
+    # Step 3: Remove directories (force delete if not empty)
     print(f"\nStep {'3' if rename_files else '2'}: Removing directories...")
+    failed_deletes = []
+
     for dirpath in all_dirs:
         try:
             if os.path.exists(dirpath):
-                os.rmdir(dirpath)
-                if verbose:
-                    print(f"Removed directory: {dirpath}")
-        except OSError as e:
+                try:
+                    # Try to remove empty directory first
+                    os.rmdir(dirpath)
+                    if verbose:
+                        print(f"Removed directory: {dirpath}")
+                except OSError:
+                    # Directory not empty - force delete with shutil.rmtree
+                    import shutil
+                    shutil.rmtree(dirpath, ignore_errors=False)
+                    failed_deletes.append(dirpath)
+                    if verbose:
+                        print(f"Force-deleted non-empty directory: {dirpath}")
+        except Exception as e:
             if verbose:
                 print(f"Could not remove directory {dirpath}: {e}")
 
@@ -567,8 +578,29 @@ def secure_delete_folder(folder_path, passes=3, rename_files=True, verbose=False
     try:
         os.rmdir(folder)
         print(f"Removed root folder: {folder}")
-    except OSError as e:
-        print(f"Warning: Could not remove root folder {folder}: {e}")
+    except OSError:
+        # Root folder not empty - force delete
+        try:
+            import shutil
+            shutil.rmtree(folder, ignore_errors=False)
+            print(f"Force-deleted root folder: {folder}")
+            failed_deletes.append(str(folder))
+        except Exception as e:
+            print(f"Warning: Could not remove root folder {folder}: {e}")
+
+    # Warn about force-deleted directories
+    if failed_deletes:
+        print("\n" + "!" * 70)
+        print(f"WARNING: {len(failed_deletes)} directories were not empty")
+        print("!" * 70)
+        print("Some files could not be securely deleted (permissions/locks).")
+        print("These directories were force-deleted with remaining files.")
+        print("Files were NOT securely overwritten before deletion.")
+        print("\nThis may happen due to:")
+        print("  - Files locked by another process")
+        print("  - Permission denied errors")
+        print("  - Antivirus interference")
+        print("!" * 70)
 
     elapsed_time = time.time() - start_time
 
