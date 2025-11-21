@@ -174,7 +174,24 @@ Automatically detects NTFS journal size and creates optimal number of dummy file
 
 ### Step 5: Free Space Wiping (Optional)
 
-Optionally runs Windows `cipher /w` to overwrite all free space on the drive, ensuring deleted file content cannot be recovered from unallocated sectors.
+**IMPORTANT**: `cipher /w` wipes **ALL free space on the ENTIRE DRIVE**, not just the folder you deleted!
+
+When you run `cipher /w:c:\temp`, it:
+- Uses `c:\temp` only as a **temp file location**
+- But wipes **ALL free space on C: drive** (could be 100-500+ GB)
+- Does **3 full passes** (0x00, 0xFF, random data)
+- Takes **30 minutes to several hours** depending on free space
+
+**Why you might NOT need it**:
+- Your files are already securely deleted (3 overwrites by default)
+- cipher /w only helps if you want to wipe OTHER deleted files from weeks/months ago
+- Very slow compared to the targeted deletion this tool provides
+
+**When to use it**:
+- You want to erase ALL deleted files on the drive
+- Maximum paranoia
+- Drive about to be disposed of
+- Forensic analysis is a real threat
 
 ## Security Considerations
 

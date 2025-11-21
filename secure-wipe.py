@@ -892,15 +892,30 @@ def flood_vss(path, target_size_gb=None):
 
 def run_cipher_wipe(path):
     """
-    Run Windows cipher command to wipe free space
+    Run Windows cipher command to wipe ALL free space on entire drive
+
+    WARNING: This wipes the ENTIRE DRIVE's free space, not just the folder.
     """
     if sys.platform != 'win32':
         print("\nSkipping cipher /w (only available on Windows)")
         return
 
+    # Get drive letter for clear messaging
+    drive_letter = Path(path).resolve().drive
+
     print("\n" + "=" * 70)
-    print(f"Running cipher /w to wipe free space on: {path}")
-    print("This may take a while depending on free space available...")
+    print("WARNING: cipher /w wipes ALL FREE SPACE on the ENTIRE DRIVE")
+    print("=" * 70)
+    print(f"\nThis command will:")
+    print(f"  - Use {path} as a location to create temporary files")
+    print(f"  - BUT wipe ALL free space on {drive_letter if drive_letter else 'the drive'}")
+    print(f"  - NOT just the space from your deleted folder")
+    print("\nThe process:")
+    print("  Pass 1: Write 0x00 (zeros) across all free space")
+    print("  Pass 2: Write 0xFF (ones) across all free space")
+    print("  Pass 3: Write random data across all free space")
+    print("\nThis may take 30 minutes to several hours depending on free space!")
+    print(f"Typical time for 100-500 GB free space: 1-2 hours")
     print("=" * 70)
 
     try:
@@ -991,7 +1006,15 @@ ANTI-FORENSICS TECHNIQUES:
     1. Delete files with renaming (default)
     2. Flood VSS to remove shadow copies (--flood-vss)
     3. Flood journal to obscure metadata (--flood-journal)
-    4. Optionally wipe free space (cipher /w)
+    4. Optionally wipe ALL free space on ENTIRE DRIVE (cipher /w)
+
+IMPORTANT - About cipher /w:
+  cipher /w wipes ALL free space on the ENTIRE DRIVE, not just your folder!
+  - Uses specified path only as a temp file location
+  - Wipes 100-500+ GB depending on drive free space
+  - Takes 30 minutes to several hours (3 full passes)
+  - Only needed to erase OTHER old deleted files from weeks/months ago
+  - Your files are already securely deleted by this tool
 
 WARNING: This will permanently delete all files in the specified folder!
          Files will be overwritten before deletion to prevent recovery.
@@ -1102,13 +1125,47 @@ WARNING: This will permanently delete all files in the specified folder!
     # Ask about cipher wipe
     if parent_dir and sys.platform == 'win32':
         print(f"\nSecure deletion complete.")
-        response = input(f"\nRun cipher /w to wipe free space at '{parent_dir}'? (yes/no): ")
+        print("\n" + "=" * 70)
+        print("OPTIONAL: Wipe ALL free space on entire drive with cipher /w")
+        print("=" * 70)
+
+        # Get drive info
+        try:
+            drive_letter = Path(parent_dir).resolve().drive
+            result = subprocess.run(['fsutil', 'volume', 'diskfree', drive_letter],
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if 'Total free bytes' in line:
+                        parts = line.split(':')
+                        if len(parts) > 1:
+                            try:
+                                free_bytes = int(parts[1].strip().replace(',', ''))
+                                free_gb = free_bytes / (1024 * 1024 * 1024)
+                                print(f"\nFree space on {drive_letter}: {free_gb:.1f} GB")
+                                est_time = (free_gb / 100) * 30  # ~30 min per 100 GB estimate
+                                print(f"Estimated time: {est_time:.0f}-{est_time*2:.0f} minutes ({est_time/60:.1f}-{est_time*2/60:.1f} hours)")
+                            except:
+                                pass
+        except:
+            pass
+
+        print("\nIMPORTANT: cipher /w will:")
+        print(f"  - Wipe ALL free space on the ENTIRE {drive_letter if drive_letter else 'drive'}")
+        print(f"  - NOT just wipe space from {parent_dir}")
+        print("  - Take 30 min to several hours depending on free space")
+        print("  - Do 3 full passes (0x00, 0xFF, random data)")
+
+        response = input(f"\nWipe ALL free space on {drive_letter if drive_letter else 'the drive'}? (yes/no): ")
 
         if response.lower() in ['yes', 'y']:
             run_cipher_wipe(parent_dir)
         else:
             print("\nSkipping cipher wipe.")
-            print(f"You can manually run: cipher /w:{parent_dir}")
+            print(f"\nYou already securely deleted your files with {passes} overwrite passes.")
+            print("cipher /w is optional and only needed if you want to wipe OTHER")
+            print("deleted files on the drive from weeks/months ago.")
+            print(f"\nTo run manually later: cipher /w:{parent_dir}")
 
     print("\n" + "=" * 70)
     print("All operations complete!")
