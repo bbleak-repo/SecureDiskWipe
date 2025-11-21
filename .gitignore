@@ -50,3 +50,5 @@ test-delete/
 temp-wipe/
 _journal_flood_*/
 _vss_flood_*/
+_photorec_scan_*/
+recup_dir.*/

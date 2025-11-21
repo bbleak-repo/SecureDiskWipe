@@ -974,7 +974,7 @@ def install_tool(tool_name, friendly_name):
 
 def validate_deletion(folder_path, original_names=None):
     """
-    Validate that deleted files cannot be recovered
+    Validate that deleted files cannot be recovered using PhotoRec
 
     Args:
         folder_path: Path where files were deleted from
@@ -989,7 +989,7 @@ def validate_deletion(folder_path, original_names=None):
     print("\n" + "=" * 70)
     print("VALIDATION - Testing file recovery")
     print("=" * 70)
-    print("\nThis will attempt to recover deleted files using Recuva")
+    print("\nThis will attempt to recover deleted files using PhotoRec")
     print("to verify secure deletion was successful.")
     print("=" * 70)
 
@@ -1001,32 +1001,32 @@ def validate_deletion(folder_path, original_names=None):
         print("Please install Windows Package Manager (winget) first")
         return False, "winget not available"
 
-    # Check if Recuva is installed
-    recuva_id = 'Piriform.Recuva'
-    if not check_tool_installed(recuva_id):
-        print(f"\nRecuva not found. Installing...")
-        if not install_tool(recuva_id, 'Recuva'):
-            print("\nValidation aborted - could not install Recuva")
-            print("You can manually install: winget install Piriform.Recuva")
-            return False, "Failed to install Recuva"
+    # Check if PhotoRec (TestDisk package) is installed
+    photorec_id = 'CGSecurity.TestDisk'
+    if not check_tool_installed(photorec_id):
+        print(f"\nPhotoRec not found. Installing TestDisk package...")
+        if not install_tool(photorec_id, 'TestDisk (includes PhotoRec)'):
+            print("\nValidation aborted - could not install PhotoRec")
+            print("You can manually install: winget install CGSecurity.TestDisk")
+            return False, "Failed to install PhotoRec"
 
-    # Find Recuva executable
-    recuva_paths = [
-        r"C:\Program Files\Recuva\Recuva64.exe",
-        r"C:\Program Files (x86)\Recuva\Recuva.exe",
-        r"C:\Program Files\Recuva\Recuva.exe",
+    # Find PhotoRec executable
+    photorec_paths = [
+        r"C:\Program Files\TestDisk\photorec_win.exe",
+        r"C:\Program Files (x86)\TestDisk\photorec_win.exe",
+        r"C:\TestDisk\photorec_win.exe",
     ]
 
-    recuva_exe = None
-    for path in recuva_paths:
+    photorec_exe = None
+    for path in photorec_paths:
         if os.path.exists(path):
-            recuva_exe = path
+            photorec_exe = path
             break
 
-    if not recuva_exe:
-        print("\nWARNING: Recuva installed but executable not found")
-        print("Please run Recuva manually to verify deletion")
-        return False, "Recuva executable not found"
+    if not photorec_exe:
+        print("\nWARNING: PhotoRec installed but executable not found")
+        print("Please run PhotoRec manually to verify deletion")
+        return False, "PhotoRec executable not found"
 
     # Get drive letter
     drive_letter = Path(folder_path).resolve().drive
@@ -1034,105 +1034,107 @@ def validate_deletion(folder_path, original_names=None):
         print("\nERROR: Could not determine drive letter")
         return False, "No drive letter"
 
-    # Create temp output directory
-    output_dir = Path(folder_path).parent / f"_recuva_scan_{secrets.token_hex(4)}"
-    output_dir.mkdir(exist_ok=True)
-    output_file = output_dir / "recuva_results.txt"
+    # Create temp recovery directory
+    recovery_dir = Path(folder_path).parent / f"_photorec_scan_{secrets.token_hex(4)}"
+    recovery_dir.mkdir(exist_ok=True)
 
-    print(f"\nRunning Recuva scan on {drive_letter}...")
-    print("This may take 2-5 minutes...")
+    print(f"\nRunning PhotoRec scan on {drive_letter}...")
+    print("This may take 2-10 minutes depending on drive size...")
+    print("PhotoRec will scan free space for recoverable files...")
 
     try:
-        # Run Recuva in command-line mode
-        # /a = scan all files, /n = non-interactive
+        # Run PhotoRec in command-line mode
+        # /d = recovery directory
+        # /cmd = scripted commands
+        # partition_none = scan whole disk
+        # freespace = only scan free space (faster)
+        # search = start recovery
         result = subprocess.run(
-            [recuva_exe, '/a', '/n', drive_letter, '/output', str(output_file)],
+            [photorec_exe, '/d', str(recovery_dir), '/cmd', drive_letter,
+             'partition_none,freespace,search'],
             capture_output=True,
             text=True,
-            timeout=600
+            timeout=900  # 15 minutes max
         )
 
-        if not output_file.exists():
-            print("\nWARNING: Recuva did not produce output file")
-            print("Scan may have been blocked or failed")
-
-            # Clean up
-            try:
-                output_dir.rmdir()
-            except:
-                pass
-
-            return False, "No scan results"
-
-        # Parse results
+        # Check if any files were recovered
         print("\nAnalyzing recovery results...")
 
-        with open(output_file, 'r', encoding='utf-8', errors='ignore') as f:
-            scan_results = f.read()
+        recovered_files = []
+        original_filenames_found = []
+
+        # Scan recovery directory for files
+        if recovery_dir.exists():
+            for item in recovery_dir.rglob('*'):
+                if item.is_file():
+                    recovered_files.append(item.name)
+                    # Check if this matches any original filenames
+                    if original_names:
+                        for orig_name in original_names:
+                            if orig_name.lower() in item.name.lower():
+                                original_filenames_found.append(orig_name)
 
         # Clean up
         try:
-            output_file.unlink()
-            output_dir.rmdir()
-        except:
-            pass
+            import shutil
+            if recovery_dir.exists():
+                shutil.rmtree(recovery_dir)
+        except Exception as cleanup_error:
+            print(f"\nNote: Could not clean up recovery directory: {cleanup_error}")
+            print(f"Please manually delete: {recovery_dir}")
 
-        # Check for original filenames
-        issues_found = []
-
-        if original_names:
-            for name in original_names:
-                if name.lower() in scan_results.lower():
-                    issues_found.append(f"Found original filename: {name}")
-
-        # Count recoverable files in the target area
-        recoverable_count = scan_results.lower().count('excellent')
-        recoverable_count += scan_results.lower().count('good')
-
-        # Check for .tmp files (our renamed files)
-        tmp_file_count = scan_results.lower().count('.tmp')
+        # Analyze results
+        recoverable_count = len(recovered_files)
+        tmp_file_count = sum(1 for f in recovered_files if '.tmp' in f.lower())
 
         print("=" * 70)
         print("VALIDATION RESULTS")
         print("=" * 70)
 
-        if issues_found:
-            print("\nWARNING: Potential issues detected:")
-            for issue in issues_found:
-                print(f"  - {issue}")
+        if original_filenames_found:
+            print("\nWARNING: Original filenames detected!")
+            print("PhotoRec recovered files with original names:")
+            for name in set(original_filenames_found[:10]):  # Show first 10
+                print(f"  - {name}")
+            if len(original_filenames_found) > 10:
+                print(f"  ... and {len(original_filenames_found) - 10} more")
 
         print(f"\nRecoverable files detected: {recoverable_count}")
         print(f"Renamed .tmp files found: {tmp_file_count}")
+        print(f"Original filenames found: {len(set(original_filenames_found))}")
 
-        if recoverable_count == 0 and not issues_found:
+        if recoverable_count == 0:
             print("\n" + "=" * 70)
             print("SUCCESS: No recoverable files found!")
             print("=" * 70)
             print("Secure deletion appears successful.")
-            print("Original filenames not detected in recovery scan.")
+            print("PhotoRec could not recover any files from free space.")
             return True, "No recoverable files"
 
-        elif tmp_file_count > 0 and not issues_found:
+        elif recoverable_count > 0 and not original_filenames_found:
             print("\n" + "=" * 70)
-            print("PARTIAL SUCCESS: Renamed files detected")
+            print("PARTIAL SUCCESS: Files recovered but no original names")
             print("=" * 70)
             print("Files were renamed successfully (no original names found).")
-            print("However, some .tmp files may be recoverable.")
+            print(f"However, PhotoRec recovered {recoverable_count} files.")
             print("This is expected if deletion just occurred.")
             print("\nRecommendation:")
             print("  - Run cipher /w to wipe free space")
-            print("  - Or use --flood-vss and --flood-journal")
+            print("  - Or use --flood-vss and --flood-journal for additional security")
             return True, "Files renamed but may be recoverable"
 
         else:
             print("\n" + "=" * 70)
             print("WARNING: Files may be recoverable")
             print("=" * 70)
-            print("Some files appear to be recoverable.")
+            print(f"PhotoRec recovered {recoverable_count} files.")
+            if original_filenames_found:
+                print(f"Found {len(set(original_filenames_found))} files with original names!")
             print("\nPossible causes:")
             print("  - Deletion just occurred (data not yet overwritten)")
             print("  - Volume Shadow Copies contain old versions")
             print("  - NTFS journal contains metadata")
+            print("  - Free space not yet overwritten")
             print("\nRecommendations:")
             print("  1. Run with --flood-vss to remove shadow copies")
             print("  2. Run with --flood-journal to obscure metadata")
@@ -1140,12 +1142,12 @@ def validate_deletion(folder_path, original_names=None):
             return False, "Recoverable files detected"
 
     except subprocess.TimeoutExpired:
-        print("\nERROR: Recuva scan timed out (>10 minutes)")
+        print("\nERROR: PhotoRec scan timed out (>15 minutes)")
         # Clean up
         try:
-            if output_file.exists():
-                output_file.unlink()
-            output_dir.rmdir()
+            import shutil
+            if recovery_dir.exists():
+                shutil.rmtree(recovery_dir)
         except:
             pass
         return False, "Scan timeout"
@@ -1154,9 +1156,9 @@ def validate_deletion(folder_path, original_names=None):
         print(f"\nERROR during validation: {e}")
         # Clean up
         try:
-            if output_file.exists():
-                output_file.unlink()
-            output_dir.rmdir()
+            import shutil
+            if recovery_dir.exists():
+                shutil.rmtree(recovery_dir)
         except:
             pass
         return False, f"Error: {e}"
@@ -1254,8 +1256,8 @@ FEATURES:
   - Auto-sizing for journal/VSS floods based on system configuration
   - NTFS journal flooding to obscure metadata traces (optional)
   - VSS storage flooding to force old snapshot deletion (optional)
-  - Automated validation with Recuva recovery testing (optional)
-  - Auto-installation of Recuva via winget if needed
+  - Automated validation with PhotoRec recovery testing (optional)
+  - Auto-installation of PhotoRec (TestDisk) via winget if needed
   - Time and throughput statistics
 
 SECURITY TECHNIQUES:
@@ -1280,12 +1282,12 @@ ANTI-FORENSICS TECHNIQUES:
     - Safer than manual deletion (preserves system functionality)
     - Typical: 10-50 GB depending on VSS allocation (5-15 minutes)
 
-  --validate: Automated deletion validation with Recuva
-    - Automatically installs Recuva via winget if not present
-    - Runs file recovery scan after deletion
-    - Checks for original filenames in scan results
+  --validate: Automated deletion validation with PhotoRec
+    - Automatically installs PhotoRec (TestDisk package) via winget if not present
+    - Runs file recovery scan on free space after deletion
+    - Checks for original filenames in recovered files
     - Provides success/failure report with recommendations
-    - Typical: 2-5 minutes depending on drive size
+    - Typical: 2-10 minutes depending on drive size
 
   Recommended workflow for maximum security:
     1. Delete files with renaming (default)

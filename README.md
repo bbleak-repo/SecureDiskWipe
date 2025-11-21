@@ -10,7 +10,7 @@ SecureDiskWipe goes beyond simple file deletion by implementing multiple layers 
 - **Filename Obfuscation**: 3-pass renaming with 48-character random names
 - **NTFS Journal Flooding**: Automatic metadata obfuscation without disabling system features
 - **VSS Storage Flooding**: Forces deletion of shadow copies through natural Windows mechanisms
-- **Automated Validation**: Recuva recovery testing to verify secure deletion
+- **Automated Validation**: PhotoRec recovery testing to verify secure deletion
 - **Free Space Wiping**: Optional integration with Windows cipher command
 - **Optimized Performance**: Smart buffering and batched disk operations for 40-60% speed improvement
 
@@ -22,8 +22,8 @@ SecureDiskWipe goes beyond simple file deletion by implementing multiple layers 
 - Secure file and directory renaming (3 passes, 48-char random names)
 - NTFS journal flooding with auto-sizing
 - Volume Shadow Copy (VSS) flooding with auto-detection
-- Automated validation with Recuva recovery testing
-- Auto-installation of Recuva via winget
+- Automated validation with PhotoRec recovery testing
+- Auto-installation of PhotoRec (TestDisk) via winget
 - Progress tracking with ETA (requires tqdm)
 - Comprehensive security warnings (VSS, NTFS journal)
 - Windows cipher integration for free space wiping
@@ -184,27 +184,35 @@ Automatically detects NTFS journal size and creates optimal number of dummy file
 --validate
 ```
 
-Automatically tests whether files can be recovered using Recuva (a popular file recovery tool).
+Automatically tests whether files can be recovered using PhotoRec (a professional open-source file recovery tool).
 
 **What it does:**
 - Checks if winget (Windows Package Manager) is installed
-- Auto-installs Recuva via winget if not present
-- Runs a file recovery scan on the drive
-- Checks for original filenames in scan results
+- Auto-installs PhotoRec (TestDisk package) via winget if not present
+- Runs a file recovery scan on free space
+- Checks for original filenames in recovered files
 - Reports recoverable files and provides recommendations
 
 **Process:**
-1. Install Recuva if needed: `winget install Piriform.Recuva`
-2. Run Recuva scan: `recuva /a /n [drive] /output results.txt`
-3. Parse results for original filenames
+1. Install PhotoRec if needed: `winget install CGSecurity.TestDisk`
+2. Run PhotoRec scan: `photorec /d recovery_dir /cmd [drive] partition_none,freespace,search`
+3. Analyze recovered files for original filenames
 4. Count recoverable files
 5. Provide success/failure report with recommendations
+
+**Why PhotoRec is better:**
+- Professional-grade tool used in forensics
+- Excellent command-line support for automation
+- Scans free space (where deleted files exist)
+- Open-source and actively maintained
+- More thorough than consumer recovery tools
 
 **Why this is useful:**
 - Verifies secure deletion worked as expected
 - Identifies if shadow copies or journal entries survived
 - Provides actionable recommendations for improvement
 - Automated and hands-off
+- Uses the same tools forensic investigators use
 
 **Typical Results:**
 - **Success**: No recoverable files, no original filenames found
@@ -386,8 +394,8 @@ Always test on non-critical data first.
 - Filename obfuscation with 3-pass renaming
 - Auto-sizing NTFS journal flooding
 - Auto-sizing VSS storage flooding
-- Automated validation with Recuva recovery testing
-- Auto-installation of Recuva via winget
+- Automated validation with PhotoRec recovery testing
+- Auto-installation of PhotoRec (TestDisk) via winget
 - Progress tracking with tqdm
 - Comprehensive security warnings
 - Optimized performance (40-60% faster)
