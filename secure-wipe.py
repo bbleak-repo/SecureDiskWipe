@@ -922,6 +922,246 @@ def flood_vss(path, target_size_gb=None):
             pass
 
 
+def check_tool_installed(tool_name):
+    """
+    Check if a tool is installed via winget
+
+    Args:
+        tool_name: Winget package ID (e.g., 'Piriform.Recuva')
+
+    Returns True if installed, False otherwise
+    """
+    try:
+        result = subprocess.run(
+            ['winget', 'list', '--id', tool_name],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return tool_name in result.stdout
+    except Exception:
+        return False
+
+
+def install_tool(tool_name, friendly_name):
+    """
+    Install a tool via winget
+
+    Args:
+        tool_name: Winget package ID
+        friendly_name: Human-readable name
+
+    Returns True if successful, False otherwise
+    """
+    print(f"\nInstalling {friendly_name} via winget...")
+    try:
+        result = subprocess.run(
+            ['winget', 'install', '--id', tool_name, '--silent', '--accept-package-agreements', '--accept-source-agreements'],
+            capture_output=True,
+            text=True,
+            timeout=300
+        )
+        if result.returncode == 0:
+            print(f"{friendly_name} installed successfully!")
+            return True
+        else:
+            print(f"Failed to install {friendly_name}: {result.stderr}")
+            return False
+    except Exception as e:
+        print(f"Error installing {friendly_name}: {e}")
+        return False
+
+
+def validate_deletion(folder_path, original_names=None):
+    """
+    Validate that deleted files cannot be recovered
+
+    Args:
+        folder_path: Path where files were deleted from
+        original_names: List of original filenames to search for (optional)
+
+    Returns tuple: (success, details)
+    """
+    if sys.platform != 'win32':
+        print("\nValidation is only available on Windows")
+        return False, "Not on Windows"
+
+    print("\n" + "=" * 70)
+    print("VALIDATION - Testing file recovery")
+    print("=" * 70)
+    print("\nThis will attempt to recover deleted files using Recuva")
+    print("to verify secure deletion was successful.")
+    print("=" * 70)
+
+    # Check if winget is available
+    try:
+        subprocess.run(['winget', '--version'], capture_output=True, timeout=5)
+    except Exception:
+        print("\nERROR: winget is not available")
+        print("Please install Windows Package Manager (winget) first")
+        return False, "winget not available"
+
+    # Check if Recuva is installed
+    recuva_id = 'Piriform.Recuva'
+    if not check_tool_installed(recuva_id):
+        print(f"\nRecuva not found. Installing...")
+        if not install_tool(recuva_id, 'Recuva'):
+            print("\nValidation aborted - could not install Recuva")
+            print("You can manually install: winget install Piriform.Recuva")
+            return False, "Failed to install Recuva"
+
+    # Find Recuva executable
+    recuva_paths = [
+        r"C:\Program Files\Recuva\Recuva64.exe",
+        r"C:\Program Files (x86)\Recuva\Recuva.exe",
+        r"C:\Program Files\Recuva\Recuva.exe",
+    ]
+
+    recuva_exe = None
+    for path in recuva_paths:
+        if os.path.exists(path):
+            recuva_exe = path
+            break
+
+    if not recuva_exe:
+        print("\nWARNING: Recuva installed but executable not found")
+        print("Please run Recuva manually to verify deletion")
+        return False, "Recuva executable not found"
+
+    # Get drive letter
+    drive_letter = Path(folder_path).resolve().drive
+    if not drive_letter:
+        print("\nERROR: Could not determine drive letter")
+        return False, "No drive letter"
+
+    # Create temp output directory
+    output_dir = Path(folder_path).parent / f"_recuva_scan_{secrets.token_hex(4)}"
+    output_dir.mkdir(exist_ok=True)
+    output_file = output_dir / "recuva_results.txt"
+
+    print(f"\nRunning Recuva scan on {drive_letter}...")
+    print("This may take 2-5 minutes...")
+
+    try:
+        # Run Recuva in command-line mode
+        # /a = scan all files, /n = non-interactive
+        result = subprocess.run(
+            [recuva_exe, '/a', '/n', drive_letter, '/output', str(output_file)],
+            capture_output=True,
+            text=True,
+            timeout=600
+        )
+
+        if not output_file.exists():
+            print("\nWARNING: Recuva did not produce output file")
+            print("Scan may have been blocked or failed")
+
+            # Clean up
+            try:
+                output_dir.rmdir()
+            except:
+                pass
+
+            return False, "No scan results"
+
+        # Parse results
+        print("\nAnalyzing recovery results...")
+
+        with open(output_file, 'r', encoding='utf-8', errors='ignore') as f:
+            scan_results = f.read()
+
+        # Clean up
+        try:
+            output_file.unlink()
+            output_dir.rmdir()
+        except:
+            pass
+
+        # Check for original filenames
+        issues_found = []
+
+        if original_names:
+            for name in original_names:
+                if name.lower() in scan_results.lower():
+                    issues_found.append(f"Found original filename: {name}")
+
+        # Count recoverable files in the target area
+        recoverable_count = scan_results.lower().count('excellent')
+        recoverable_count += scan_results.lower().count('good')
+
+        # Check for .tmp files (our renamed files)
+        tmp_file_count = scan_results.lower().count('.tmp')
+
+        print("=" * 70)
+        print("VALIDATION RESULTS")
+        print("=" * 70)
+
+        if issues_found:
+            print("\nWARNING: Potential issues detected:")
+            for issue in issues_found:
+                print(f"  - {issue}")
+
+        print(f"\nRecoverable files detected: {recoverable_count}")
+        print(f"Renamed .tmp files found: {tmp_file_count}")
+
+        if recoverable_count == 0 and not issues_found:
+            print("\n" + "=" * 70)
+            print("SUCCESS: No recoverable files found!")
+            print("=" * 70)
+            print("Secure deletion appears successful.")
+            print("Original filenames not detected in recovery scan.")
+            return True, "No recoverable files"
+
+        elif tmp_file_count > 0 and not issues_found:
+            print("\n" + "=" * 70)
+            print("PARTIAL SUCCESS: Renamed files detected")
+            print("=" * 70)
+            print("Files were renamed successfully (no original names found).")
+            print("However, some .tmp files may be recoverable.")
+            print("This is expected if deletion just occurred.")
+            print("\nRecommendation:")
+            print("  - Run cipher /w to wipe free space")
+            print("  - Or use --flood-vss and --flood-journal")
+            return True, "Files renamed but may be recoverable"
+
+        else:
+            print("\n" + "=" * 70)
+            print("WARNING: Files may be recoverable")
+            print("=" * 70)
+            print("Some files appear to be recoverable.")
+            print("\nPossible causes:")
+            print("  - Deletion just occurred (data not yet overwritten)")
+            print("  - Volume Shadow Copies contain old versions")
+            print("  - NTFS journal contains metadata")
+            print("\nRecommendations:")
+            print("  1. Run with --flood-vss to remove shadow copies")
+            print("  2. Run with --flood-journal to obscure metadata")
+            print("  3. Run cipher /w to wipe all free space")
+            return False, "Recoverable files detected"
+
+    except subprocess.TimeoutExpired:
+        print("\nERROR: Recuva scan timed out (>10 minutes)")
+        # Clean up
+        try:
+            if output_file.exists():
+                output_file.unlink()
+            output_dir.rmdir()
+        except:
+            pass
+        return False, "Scan timeout"
+
+    except Exception as e:
+        print(f"\nERROR during validation: {e}")
+        # Clean up
+        try:
+            if output_file.exists():
+                output_file.unlink()
+            output_dir.rmdir()
+        except:
+            pass
+        return False, f"Error: {e}"
+
+
 def run_cipher_wipe(path):
     """
     Run Windows cipher command to wipe ALL free space on entire drive
@@ -992,6 +1232,10 @@ Examples:
   Advanced - Auto-flood journal and VSS (recommended for maximum security):
     python wipe-folder.py /path/to/folder --flood-journal --flood-vss
 
+  Advanced - Validate deletion with Recuva recovery test:
+    python wipe-folder.py /path/to/folder --validate
+    python wipe-folder.py /path/to/folder --flood-journal --flood-vss --validate
+
   Advanced - Manual control:
     python wipe-folder.py /path/to/folder --flood-journal=50000
     python wipe-folder.py /path/to/folder --flood-vss=20
@@ -1010,6 +1254,8 @@ FEATURES:
   - Auto-sizing for journal/VSS floods based on system configuration
   - NTFS journal flooding to obscure metadata traces (optional)
   - VSS storage flooding to force old snapshot deletion (optional)
+  - Automated validation with Recuva recovery testing (optional)
+  - Auto-installation of Recuva via winget if needed
   - Time and throughput statistics
 
 SECURITY TECHNIQUES:
@@ -1034,11 +1280,19 @@ ANTI-FORENSICS TECHNIQUES:
     - Safer than manual deletion (preserves system functionality)
     - Typical: 10-50 GB depending on VSS allocation (5-15 minutes)
 
+  --validate: Automated deletion validation with Recuva
+    - Automatically installs Recuva via winget if not present
+    - Runs file recovery scan after deletion
+    - Checks for original filenames in scan results
+    - Provides success/failure report with recommendations
+    - Typical: 2-5 minutes depending on drive size
+
   Recommended workflow for maximum security:
     1. Delete files with renaming (default)
     2. Flood VSS to remove shadow copies (--flood-vss)
     3. Flood journal to obscure metadata (--flood-journal)
-    4. Optionally wipe ALL free space on ENTIRE DRIVE (cipher /w)
+    4. Validate deletion with recovery test (--validate)
+    5. Optionally wipe ALL free space on ENTIRE DRIVE (cipher /w)
 
 IMPORTANT - About cipher /w:
   cipher /w wipes ALL free space on the ENTIRE DRIVE, not just your folder!
@@ -1097,6 +1351,12 @@ WARNING: This will permanently delete all files in the specified folder!
         help='Flood VSS storage with data to force old snapshot deletion (auto-sizes, or specify GB)'
     )
 
+    parser.add_argument(
+        '--validate',
+        action='store_true',
+        help='Run recovery test after deletion to verify files cannot be recovered (requires winget)'
+    )
+
     args = parser.parse_args()
 
     folder_path = Path(args.folder_path).resolve()
@@ -1111,12 +1371,21 @@ WARNING: This will permanently delete all files in the specified folder!
         print(f"\nERROR: Folder does not exist: {folder_path}")
         sys.exit(1)
 
-    # Count files for user awareness
+    # Count files for user awareness and capture original filenames for validation
+    original_filenames = []
     try:
         file_count = sum(1 for _ in folder_path.rglob('*') if _.is_file())
         dir_count = sum(1 for _ in folder_path.rglob('*') if _.is_dir())
         print(f"Files to delete: {file_count}")
         print(f"Directories to delete: {dir_count}")
+
+        # Capture original filenames if validation is requested
+        if args.validate:
+            print("Capturing original filenames for validation...")
+            for file_path in folder_path.rglob('*'):
+                if file_path.is_file():
+                    original_filenames.append(file_path.name)
+            print(f"Captured {len(original_filenames)} filenames for validation")
     except Exception as e:
         print(f"Could not count files: {e}")
 
@@ -1153,6 +1422,10 @@ WARNING: This will permanently delete all files in the specified folder!
         else:
             # User-specified count
             flood_journal(parent_dir, num_files=args.flood_journal)
+
+    # Validate deletion if requested
+    if args.validate and parent_dir:
+        validate_deletion(folder_path, original_names=original_filenames if original_filenames else None)
 
     # Ask about cipher wipe
     if parent_dir and sys.platform == 'win32':
