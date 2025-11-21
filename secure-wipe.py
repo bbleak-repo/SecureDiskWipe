@@ -402,8 +402,24 @@ def secure_delete_file(filepath, passes=3, pbar=None, verbose=False):
                 pbar.update(1)
 
             return True
-    except PermissionError:
-        msg = f"Permission denied (file may be in use): {filepath}"
+    except PermissionError as e:
+        msg = f"Permission denied: {os.path.basename(filepath)} (Error: {e})"
+        if verbose:
+            print(msg)
+        if pbar:
+            pbar.write(msg)
+            pbar.update(1)
+        return False
+    except OSError as e:
+        # Catch specific Windows errors
+        if e.winerror == 5:
+            msg = f"Access denied (WinError 5): {os.path.basename(filepath)} - Try running as Administrator"
+        elif e.winerror == 32:
+            msg = f"File in use (WinError 32): {os.path.basename(filepath)} - Close applications using this file"
+        elif e.winerror == 183:
+            msg = f"File exists (WinError 183): {os.path.basename(filepath)}"
+        else:
+            msg = f"OS Error {e.winerror}: {os.path.basename(filepath)} - {e}"
         if verbose:
             print(msg)
         if pbar:
@@ -411,7 +427,7 @@ def secure_delete_file(filepath, passes=3, pbar=None, verbose=False):
             pbar.update(1)
         return False
     except Exception as e:
-        msg = f"Error deleting {filepath}: {e}"
+        msg = f"Error deleting {os.path.basename(filepath)}: {type(e).__name__} - {e}"
         if verbose:
             print(msg)
         if pbar:
@@ -531,6 +547,7 @@ def secure_delete_folder(folder_path, passes=3, rename_files=True, verbose=False
     # Step 2: Overwrite and delete files
     print(f"\nStep {'2' if rename_files else '1'}: Overwriting and deleting files...")
     success_count = 0
+    failed_files = []
     delete_start = time.time()
 
     if TQDM_AVAILABLE:
@@ -539,6 +556,8 @@ def secure_delete_folder(folder_path, passes=3, rename_files=True, verbose=False
                 if os.path.exists(filepath):
                     if secure_delete_file(filepath, passes, pbar=pbar, verbose=verbose):
                         success_count += 1
+                    else:
+                        failed_files.append(filepath)
                 else:
                     pbar.update(1)
     else:
@@ -546,10 +565,28 @@ def secure_delete_folder(folder_path, passes=3, rename_files=True, verbose=False
             if os.path.exists(filepath):
                 if secure_delete_file(filepath, passes, verbose=True):
                     success_count += 1
+                else:
+                    failed_files.append(filepath)
             if i % 100 == 0:
                 print(f"Progress: {i}/{total_files} files ({i*100//total_files}%)")
 
     delete_elapsed = time.time() - delete_start
+
+    # Report failed files
+    if failed_files:
+        print("\n" + "!" * 70)
+        print(f"WARNING: {len(failed_files)} files could not be deleted")
+        print("!" * 70)
+        print(f"\nShowing first 10 failed files:")
+        for failed_file in failed_files[:10]:
+            print(f"  - {failed_file}")
+        if len(failed_files) > 10:
+            print(f"  ... and {len(failed_files) - 10} more")
+        print("\nCommon causes:")
+        print("  - Files locked by another process (antivirus, system, etc.)")
+        print("  - Permission denied (try running as Administrator)")
+        print("  - Files in use by running applications")
+        print("!" * 70)
 
     # Step 3: Remove directories (force delete if not empty)
     print(f"\nStep {'3' if rename_files else '2'}: Removing directories...")
@@ -605,16 +642,46 @@ def secure_delete_folder(folder_path, passes=3, rename_files=True, verbose=False
     elapsed_time = time.time() - start_time
 
     print("=" * 70)
-    print(f"Secure deletion complete: {success_count}/{total_files} files successfully deleted")
+    print("DELETION SUMMARY")
+    print("=" * 70)
+    print(f"Files successfully deleted: {success_count}/{total_files}")
+    print(f"Files failed to delete: {len(failed_files)}/{total_files}")
+    print(f"Directories with issues: {len(failed_deletes)}")
     print(f"Total time elapsed: {elapsed_time:.1f} seconds ({elapsed_time/60:.1f} minutes)")
 
     if rename_files:
+        print(f"\nTiming breakdown:")
         print(f"  - Renaming: {rename_elapsed:.1f}s")
         print(f"  - Overwriting: {delete_elapsed:.1f}s")
 
-    if elapsed_time > 0 and total_size > 0:
+    if elapsed_time > 0 and total_size > 0 and success_count > 0:
         throughput = (total_size * passes) / elapsed_time / (1024 * 1024)
-        print(f"Average throughput: {throughput:.2f} MB/s")
+        print(f"\nAverage throughput: {throughput:.2f} MB/s")
+
+    # Final status
+    if success_count == total_files and len(failed_deletes) == 0:
+        print("\n" + "=" * 70)
+        print("SUCCESS: All files securely deleted!")
+        print("=" * 70)
+    elif success_count > 0:
+        print("\n" + "=" * 70)
+        print("PARTIAL SUCCESS: Some files could not be deleted")
+        print("=" * 70)
+        print(f"{success_count} files were securely deleted")
+        print(f"{len(failed_files)} files could not be deleted (permission/lock issues)")
+        if failed_deletes:
+            print(f"{len(failed_deletes)} directories could not be fully cleaned")
+    else:
+        print("\n" + "=" * 70)
+        print("ERROR: No files were successfully deleted!")
+        print("=" * 70)
+        print("Please check:")
+        print("  1. Run as Administrator (right-click Command Prompt -> Run as Administrator)")
+        print("  2. Close any programs that might have files open")
+        print("  3. Temporarily disable antivirus/Windows Defender")
+        print("  4. Ensure you have write permissions to this folder")
+
+    print("=" * 70)
 
     # Return parent directory for cipher operation
     return folder.parent
@@ -1300,10 +1367,35 @@ def run_cipher_wipe(path):
         print(f"\nError running cipher: {e}")
 
 
+def is_admin():
+    """Check if the script is running with administrator privileges (Windows)"""
+    if sys.platform != 'win32':
+        return True
+
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except Exception:
+        return False
+
+
 def main():
     print("\n" + "=" * 70)
     print("SECURE FOLDER DELETION TOOL")
     print("=" * 70)
+
+    # Check if running as admin
+    if sys.platform == 'win32' and not is_admin():
+        print("\n" + "!" * 70)
+        print("WARNING: Not running as Administrator")
+        print("!" * 70)
+        print("You may encounter permission errors when deleting files.")
+        print("For best results, right-click Command Prompt and 'Run as Administrator'")
+        print("!" * 70)
+        response = input("\nContinue anyway? (yes/no): ")
+        if response.lower() not in ['yes', 'y']:
+            print("\nExiting. Please restart as Administrator.")
+            sys.exit(1)
 
     # Show help if no arguments provided
     if len(sys.argv) == 1:
