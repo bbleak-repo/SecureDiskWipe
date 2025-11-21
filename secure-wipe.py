@@ -927,7 +927,7 @@ def check_tool_installed(tool_name):
     Check if a tool is installed via winget
 
     Args:
-        tool_name: Winget package ID (e.g., 'Piriform.Recuva')
+        tool_name: Winget package ID (e.g., 'CGSecurity.TestDisk')
 
     Returns True if installed, False otherwise
     """
@@ -938,8 +938,23 @@ def check_tool_installed(tool_name):
             text=True,
             timeout=10
         )
-        return tool_name in result.stdout
-    except Exception:
+        # Check both for exact ID match and in output
+        output_lower = result.stdout.lower()
+        tool_lower = tool_name.lower()
+
+        # Look for the package ID or common name variations
+        is_installed = (
+            tool_name in result.stdout or
+            tool_lower in output_lower or
+            'testdisk' in output_lower  # For CGSecurity.TestDisk
+        )
+
+        if is_installed:
+            print(f"{tool_name} appears to be installed")
+
+        return is_installed
+    except Exception as e:
+        print(f"Error checking if {tool_name} is installed: {e}")
         return False
 
 
@@ -954,6 +969,7 @@ def install_tool(tool_name, friendly_name):
     Returns True if successful, False otherwise
     """
     print(f"\nInstalling {friendly_name} via winget...")
+    print("This may take 1-2 minutes...")
     try:
         result = subprocess.run(
             ['winget', 'install', '--id', tool_name, '--silent', '--accept-package-agreements', '--accept-source-agreements'],
@@ -961,11 +977,22 @@ def install_tool(tool_name, friendly_name):
             text=True,
             timeout=300
         )
-        if result.returncode == 0:
-            print(f"{friendly_name} installed successfully!")
+
+        # Show output for debugging
+        if result.stdout:
+            print(f"\nWinget output:\n{result.stdout}")
+
+        if result.returncode == 0 or "Successfully installed" in result.stdout:
+            print(f"\n{friendly_name} installed successfully!")
+            # Give Windows time to update PATH
+            import time
+            time.sleep(2)
             return True
         else:
-            print(f"Failed to install {friendly_name}: {result.stderr}")
+            print(f"\nFailed to install {friendly_name}")
+            print(f"Return code: {result.returncode}")
+            if result.stderr:
+                print(f"Error: {result.stderr}")
             return False
     except Exception as e:
         print(f"Error installing {friendly_name}: {e}")
@@ -1005,28 +1032,91 @@ def validate_deletion(folder_path, original_names=None):
     photorec_id = 'CGSecurity.TestDisk'
     if not check_tool_installed(photorec_id):
         print(f"\nPhotoRec not found. Installing TestDisk package...")
+        print("NOTE: If installation fails, you can manually download from:")
+        print("      https://www.cgsecurity.org/wiki/TestDisk_Download")
+
         if not install_tool(photorec_id, 'TestDisk (includes PhotoRec)'):
-            print("\nValidation aborted - could not install PhotoRec")
-            print("You can manually install: winget install CGSecurity.TestDisk")
+            print("\nValidation aborted - could not install PhotoRec via winget")
+            print("\nAlternative installation methods:")
+            print("1. Manual download: https://www.cgsecurity.org/wiki/TestDisk_Download")
+            print("   Extract to C:\\TestDisk and run this script again")
+            print("\n2. Or via Chocolatey: choco install testdisk-photorec")
             return False, "Failed to install PhotoRec"
 
-    # Find PhotoRec executable
-    photorec_paths = [
-        r"C:\Program Files\TestDisk\photorec_win.exe",
-        r"C:\Program Files (x86)\TestDisk\photorec_win.exe",
-        r"C:\TestDisk\photorec_win.exe",
-    ]
+        # Verify installation worked
+        print("\nVerifying installation...")
+        if not check_tool_installed(photorec_id):
+            print("\nWARNING: Installation completed but package not detected")
+            print("Continuing anyway - will search for executable...")
 
+    # Find PhotoRec executable - try multiple methods
     photorec_exe = None
-    for path in photorec_paths:
-        if os.path.exists(path):
-            photorec_exe = path
-            break
+
+    # Method 1: Check if it's in PATH using 'where' command
+    try:
+        result = subprocess.run(
+            ['where', 'photorec_win.exe'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            photorec_exe = result.stdout.strip().split('\n')[0]
+            print(f"Found PhotoRec in PATH: {photorec_exe}")
+    except Exception:
+        pass
+
+    # Method 2: Check common installation paths
+    if not photorec_exe:
+        photorec_paths = [
+            r"C:\Program Files\TestDisk\photorec_win.exe",
+            r"C:\Program Files (x86)\TestDisk\photorec_win.exe",
+            r"C:\TestDisk\photorec_win.exe",
+            os.path.expanduser(r"~\AppData\Local\Microsoft\WinGet\Packages\CGSecurity.TestDisk_Microsoft.Winget.Source_8wekyb3d8bbwe\photorec_win.exe"),
+            os.path.expanduser(r"~\scoop\apps\testdisk\current\photorec_win.exe"),
+        ]
+
+        for path in photorec_paths:
+            if os.path.exists(path):
+                photorec_exe = path
+                print(f"Found PhotoRec at: {photorec_exe}")
+                break
+
+    # Method 3: Search Program Files directories
+    if not photorec_exe:
+        print("\nSearching for PhotoRec installation...")
+        search_dirs = [
+            r"C:\Program Files",
+            r"C:\Program Files (x86)",
+            os.path.expanduser(r"~\AppData\Local\Microsoft\WinGet\Packages"),
+        ]
+
+        for search_dir in search_dirs:
+            if os.path.exists(search_dir):
+                for root, dirs, files in os.walk(search_dir):
+                    if 'photorec_win.exe' in files:
+                        photorec_exe = os.path.join(root, 'photorec_win.exe')
+                        print(f"Found PhotoRec at: {photorec_exe}")
+                        break
+                if photorec_exe:
+                    break
 
     if not photorec_exe:
-        print("\nWARNING: PhotoRec installed but executable not found")
-        print("Please run PhotoRec manually to verify deletion")
+        print("\n" + "=" * 70)
+        print("ERROR: PhotoRec executable not found")
+        print("=" * 70)
+        print("\nInstallation may have succeeded but executable cannot be located.")
+        print("\nTroubleshooting steps:")
+        print("1. Check if TestDisk is installed:")
+        print("   winget list CGSecurity.TestDisk")
+        print("\n2. Manually download from: https://www.cgsecurity.org/wiki/TestDisk_Download")
+        print("\n3. Or try installing via Chocolatey:")
+        print("   choco install testdisk-photorec")
+        print("\n4. After manual installation, run this script again")
+        print("=" * 70)
         return False, "PhotoRec executable not found"
+
+    print(f"Using PhotoRec: {photorec_exe}")
 
     # Get drive letter
     drive_letter = Path(folder_path).resolve().drive
